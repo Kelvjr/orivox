@@ -28,6 +28,15 @@ export const fixtureSuggestion: Suggestion = {
 
 export const fixtureEvents: SessionEvent[] = [
   {
+    type: 'capture.level',
+    sessionId: 'fixture-session',
+    source: 'system',
+    levelRms: 0.25,
+    peak: 0.5,
+    processedFrames: 2048,
+    observedAtMs: FIXTURE_TIME_MS + 500,
+  },
+  {
     type: 'transcript.delta',
     sessionId: 'fixture-session',
     turnId: fixtureTurn.id,
@@ -42,12 +51,29 @@ export const fixtureEvents: SessionEvent[] = [
 export interface MockOrivoxBridge extends OrivoxBridge {
   /** Test-only event injection; it has no capture or provider side effects. */
   emit(event: SessionEvent): void
+  toggleDockCalls: number
+  showDockCalls: number
+  hideDockCalls: number
+  minimizeMainWindowCalls: number
+  restoreMainWindowCalls: number
+  lastToggleOptions?: { minimizeMain?: boolean }
+  dockState: boolean
+  setDockedState(isDocked: boolean): void
 }
 
 const emptySnapshot = (): SessionSnapshot => ({
   sessionId: null,
   phase: 'idle',
   activeSources: [],
+  sourceStates: {
+    microphone: { phase: 'inactive', levelRms: 0, peak: 0, processedFrames: 0, errorMessage: null },
+    system: { phase: 'inactive', levelRms: 0, peak: 0, processedFrames: 0, errorMessage: null },
+  },
+  transcriptionMode: 'off',
+  transcriptionStates: {
+    microphone: { phase: 'off', errorMessage: null },
+    system: { phase: 'off', errorMessage: null },
+  },
   startedAtMs: null,
   transcript: [],
   suggestions: [],
@@ -57,6 +83,16 @@ const emptySnapshot = (): SessionSnapshot => ({
 const copySnapshot = (value: SessionSnapshot): SessionSnapshot => ({
   ...value,
   activeSources: [...value.activeSources],
+  sourceStates: {
+    microphone: { ...value.sourceStates.microphone },
+    system: { ...value.sourceStates.system },
+  },
+  transcriptionStates: value.transcriptionStates
+    ? {
+        microphone: { ...value.transcriptionStates.microphone },
+        system: { ...value.transcriptionStates.system },
+      }
+    : undefined,
   transcript: value.transcript.map((turn) => ({ ...turn })),
   suggestions: value.suggestions.map((suggestion) => ({
     ...suggestion,
@@ -68,6 +104,7 @@ const copySnapshot = (value: SessionSnapshot): SessionSnapshot => ({
 export function createMockBridge(initial: SessionSnapshot = emptySnapshot()): MockOrivoxBridge {
   let snapshot = copySnapshot(initial)
   const listeners = new Set<(event: SessionEvent) => void>()
+  const dockListeners = new Set<(isDocked: boolean) => void>()
 
   const publish = (event: SessionEvent): void => {
     for (const listener of listeners) listener(event)
@@ -82,11 +119,42 @@ export function createMockBridge(initial: SessionSnapshot = emptySnapshot()): Mo
       ) {
         throw new Error('Explicit consent and at least one source are required')
       }
+      if (request.transcription?.mode === 'cloud') {
+        if (
+          request.transcription.provider !== 'deepgram' ||
+          request.transcription.cloudConsent?.audioTransferAccepted !== true ||
+          request.transcription.cloudConsent?.disclosureVersion !== 'm2-v1'
+        ) {
+          throw new Error('Explicit Deepgram cloud consent (disclosureVersion m2-v1) is required for cloud transcription')
+        }
+      }
+      const isCloud = request.transcription?.mode === 'cloud'
       snapshot = {
         ...emptySnapshot(),
         sessionId: 'fixture-session',
         phase: 'capturing',
         activeSources: [...new Set<CaptureSource>(request.sources)],
+        sourceStates: {
+          microphone: {
+            ...emptySnapshot().sourceStates.microphone,
+            phase: request.sources.includes('microphone') ? 'active' : 'inactive',
+          },
+          system: {
+            ...emptySnapshot().sourceStates.system,
+            phase: request.sources.includes('system') ? 'active' : 'inactive',
+          },
+        },
+        transcriptionMode: isCloud ? 'cloud' : 'off',
+        transcriptionStates: {
+          microphone: {
+            phase: isCloud && request.sources.includes('microphone') ? 'streaming' : 'off',
+            errorMessage: null,
+          },
+          system: {
+            phase: isCloud && request.sources.includes('system') ? 'streaming' : 'off',
+            errorMessage: null,
+          },
+        },
         startedAtMs: FIXTURE_TIME_MS,
       }
       publish({ type: 'capture.status', snapshot: copySnapshot(snapshot) })
@@ -103,6 +171,40 @@ export function createMockBridge(initial: SessionSnapshot = emptySnapshot()): Mo
     async getSnapshot(): Promise<SessionSnapshot> {
       return copySnapshot(snapshot)
     },
+    toggleDockCalls: 0,
+    showDockCalls: 0,
+    hideDockCalls: 0,
+    minimizeMainWindowCalls: 0,
+    restoreMainWindowCalls: 0,
+    lastToggleOptions: undefined,
+    async toggleDock(options?: { minimizeMain?: boolean }): Promise<void> {
+      this.toggleDockCalls += 1
+      this.lastToggleOptions = options
+    },
+    async showDock(options?: { minimizeMain?: boolean }): Promise<void> {
+      this.showDockCalls += 1
+    },
+    async hideDock(): Promise<void> {
+      this.hideDockCalls += 1
+    },
+    async minimizeMainWindow(): Promise<void> {
+      this.minimizeMainWindowCalls += 1
+    },
+    async restoreMainWindow(): Promise<void> {
+      this.restoreMainWindowCalls += 1
+    },
+    dockState: false,
+    async isDocked(): Promise<boolean> {
+      return this.dockState
+    },
+    setDockedState(isDocked: boolean): void {
+      this.dockState = isDocked
+      for (const listener of dockListeners) listener(isDocked)
+    },
+    onDockStateChange(listener: (isDocked: boolean) => void): () => void {
+      dockListeners.add(listener)
+      return () => dockListeners.delete(listener)
+    },
     subscribe(listener: (event: SessionEvent) => void): () => void {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -110,6 +212,21 @@ export function createMockBridge(initial: SessionSnapshot = emptySnapshot()): Mo
     emit(event: SessionEvent): void {
       if (event.type === 'capture.status') {
         snapshot = copySnapshot(event.snapshot)
+      } else if (event.type === 'capture.level' && event.sessionId === snapshot.sessionId) {
+        snapshot.sourceStates[event.source] = {
+          ...snapshot.sourceStates[event.source],
+          levelRms: event.levelRms,
+          peak: event.peak,
+          processedFrames: event.processedFrames,
+        }
+      } else if (event.type === 'transcription.status' && event.sessionId === snapshot.sessionId) {
+        if (!snapshot.transcriptionStates) {
+          snapshot.transcriptionStates = {
+            microphone: { phase: 'off', errorMessage: null },
+            system: { phase: 'off', errorMessage: null },
+          }
+        }
+        snapshot.transcriptionStates[event.source] = { ...event.state }
       } else if (event.type === 'transcript.final' && event.sessionId === snapshot.sessionId) {
         snapshot.transcript = [...snapshot.transcript.filter((turn) => turn.id !== event.turn.id), event.turn]
       } else if (event.type === 'suggestion.ready' && event.sessionId === snapshot.sessionId) {

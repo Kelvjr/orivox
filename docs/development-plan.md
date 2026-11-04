@@ -16,3 +16,5 @@ Every milestone ends with a recorded demo or test result in Concord. A later mil
 ## Working cadence
 
 For each milestone: agree the contract and acceptance criteria in Concord; claim nonoverlapping paths; implement the smallest vertical slice; run targeted checks; record evidence and risks; offer a review handoff; resolve findings; then advance. Shared type changes are proposed before either agent edits against them.
+
+The independent desktop side dock has been implemented as a separate Electron `BrowserWindow` (`DockWindowManager`) anchored to the right display edge, fully collapsible via global shortcut (`CommandOrControl+Shift+O`), ✕, Escape, and system tray (`TrayManager`), and verified natively on the Windows desktop alongside minimized and external application windows.

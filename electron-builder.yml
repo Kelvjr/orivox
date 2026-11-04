@@ -1,0 +1,21 @@
+appId: ai.orivox.desktop
+productName: Orivox
+asar: true
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: Orivox-${version}-Setup-${arch}.${ext}

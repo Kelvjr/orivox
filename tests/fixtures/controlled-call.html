@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Orivox local audio test call</title>
+    <style>
+      body { font: 18px system-ui; margin: 3rem; max-width: 44rem; }
+      button { font: inherit; padding: .6rem 1rem; margin-right: 1rem; }
+      p { line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <h1>Local audio test call</h1>
+    <p>This page connects two WebRTC peers on this computer and plays a generated tone through the default output. It records nothing and uses no external server. Keep the volume comfortable.</p>
+    <button id="start" type="button">Start local call</button>
+    <button id="stop" type="button" disabled>End call</button>
+    <p role="status" id="status">Not connected</p>
+    <audio id="remote" autoplay></audio>
+    <script>
+      const start = document.getElementById('start')
+      const stop = document.getElementById('stop')
+      const status = document.getElementById('status')
+      const remote = document.getElementById('remote')
+      let context, oscillator, caller, receiver, stream
+
+      start.addEventListener('click', async () => {
+        try {
+          context = new AudioContext()
+          await context.resume()
+          oscillator = context.createOscillator()
+          const gain = context.createGain()
+          const destination = context.createMediaStreamDestination()
+          oscillator.frequency.value = 440
+          gain.gain.value = 0.035
+          oscillator.connect(gain).connect(destination)
+          oscillator.start()
+          stream = destination.stream
+
+          caller = new RTCPeerConnection({ iceServers: [] })
+          receiver = new RTCPeerConnection({ iceServers: [] })
+          caller.onicecandidate = (event) => {
+            if (event.candidate) receiver.addIceCandidate(event.candidate)
+          }
+          receiver.onicecandidate = (event) => {
+            if (event.candidate) caller.addIceCandidate(event.candidate)
+          }
+          receiver.ontrack = (event) => {
+            remote.srcObject = event.streams[0]
+            remote.play()
+          }
+          receiver.onconnectionstatechange = () => {
+            status.textContent = `Call state: ${receiver.connectionState}`
+          }
+          stream.getTracks().forEach((track) => caller.addTrack(track, stream))
+          const offer = await caller.createOffer()
+          await caller.setLocalDescription(offer)
+          await receiver.setRemoteDescription(offer)
+          const answer = await receiver.createAnswer()
+          await receiver.setLocalDescription(answer)
+          await caller.setRemoteDescription(answer)
+          start.disabled = true
+          stop.disabled = false
+          status.textContent = 'Connecting local call'
+        } catch (error) {
+          status.textContent = `Call failed: ${error.message}`
+        }
+      })
+
+      stop.addEventListener('click', async () => {
+        oscillator?.stop()
+        stream?.getTracks().forEach((track) => track.stop())
+        caller?.close()
+        receiver?.close()
+        remote.srcObject = null
+        if (context) await context.close()
+        context = oscillator = caller = receiver = stream = null
+        start.disabled = false
+        stop.disabled = true
+        status.textContent = 'Not connected'
+      })
+    </script>
+  </body>
+</html>

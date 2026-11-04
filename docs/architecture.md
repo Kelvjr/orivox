@@ -42,6 +42,7 @@ The Electron **main process** owns window and shortcut lifecycle, capture author
 | ADR-005 | Local document index with selective snippet retrieval. | Gives grounded context while minimizing data sent externally. Verify parser quality and citations in M5. |
 | ADR-006 | Raw audio never stored by default; transcript/summary persistence requires explicit user save. | Supports privacy expectations for real conversations. Verify stop/delete/retention behavior in M6. |
 | ADR-007 | Synthetic typed events and mock bridge in M0. | Lets Antigravity build and test renderer independently of native capture. |
+| ADR-008 | The requested desktop side dock is a separate Electron window, distinct from the main Orivox application. The current in-app `SideDock` is a reusable renderer preview only. | A panel inside the main window cannot sit beside Teams/Zoom/Meet while the main window is hidden. Window lifecycle, global shortcut, positioning, and tray controls need a later cross-agent milestone and verification. |
 
 ## Ownership
 
@@ -53,9 +54,20 @@ The Electron **main process** owns window and shortcut lifecycle, capture author
 | `src/renderer/**` | Antigravity | Consent UI, transcript, suggestions, document selector, summary/settings, UI tests. No direct Node or provider access. |
 | `docs/**` and integration decisions | Codex lead; Antigravity reviews relevant contracts | Concord records decisions, progress, handoffs, tests, and risks. |
 
+## Desktop side dock architecture
+
+The main window remains a normal Windows application for dashboard, session setup, history, and settings. An **independent desktop Electron BrowserWindow** (`DockWindowManager`) provides a compact side dock running alongside Microsoft Teams, Zoom, browsers, and other Windows desktop applications:
+
+- **Separate BrowserWindow**: Created by `DockWindowManager` in Electron Main (`src/main/dock-window.ts`) with `frame: false`, `thickFrame: false`, `alwaysOnTop: true`, `skipTaskbar: true`, and loaded from `dock.html` / `src/renderer/dock.tsx`.
+- **Right Edge Anchoring**: Dynamically sized and positioned along the right edge of the primary display work area (`x = workArea.x + workArea.width - 360`, `y = workArea.y`, `width = 360`, `height = workArea.height`) avoiding Windows taskbar overlap.
+- **Zero Floating Obstructions**: Completely collapsible via `✕`, `Escape`, topbar toggle, tray menu, or global shortcut. When hidden, it leaves zero floating widgets or pills on screen.
+- **Global Shortcut**: Registered via `globalShortcut` with `CommandOrControl+Shift+O`, allowing users to summon or dismiss the dock over any active application.
+- **System Tray Controls**: Managed by `TrayManager` (`src/main/tray.ts`) showing live capture status, toggling dock visibility, minimizing/restoring main window, and offering single-click Stop Capture and Exit.
+- **Window Independence**: Minimizing or closing the main window leaves the desktop dock fully functional. Hiding the dock does not stop audio capture; the Stop action in either window or tray properly releases all audio resources.
+
 ## Open risks
 
-- Electron system loopback availability varies by Windows version, source, and call application. M1 must prove capture with Teams/Zoom/Meet and audio device changes.
+- M1 proved Windows loopback in a connected local WebRTC call. Behavior with Teams, Zoom, Google Meet, changed output devices, and other Windows versions remains untested and may vary.
 - Live transcription may return deltas without trustworthy speaker IDs or word timings. UI labels remain capture source only.
 - Real-time cloud processing has latency, outage, and cost exposure. M2 measures each; degraded mode must show a clear error.
 - PDF/DOCX extraction may be poor for scanned or complex documents. M5 defines supported cases and an explicit unsupported warning.
